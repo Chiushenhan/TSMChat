@@ -51,7 +51,9 @@ router.post("/chat", authMiddleware, async (req, res) => {
 
     chatMessages.push({ role: "user", content: userMessage });
 
-    const system = buildAgentSystemPrompt(req.user, context, userMessage);
+    const system = buildAgentSystemPrompt(req.user, context, userMessage, {
+      focusRoomId: roomId || null
+    });
     const maxTokens = isSummaryRequest(userMessage) ? 1200 : 600;
     const result = await chatWithOpenAI({
       system,
