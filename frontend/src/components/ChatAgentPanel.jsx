@@ -16,14 +16,16 @@ const QUICK_PROMPTS = [
     icon: FileText,
     label: "摘要所有聊天",
     labelEn: "Summarize all",
-    prompt: "請摘要我所有聊天室（包含 1 對 1 與群組）的對話重點，用繁體中文條列說明。"
+    prompt:
+      "請以條列方式摘要我所有聊天室（1 對 1 與群組）的最新重點：各聊天室主題、最新動態、參與者發言、待辦或待回覆事項。"
   },
   {
     id: "summarize-room",
     icon: FileText,
     label: "摘要目前聊天",
     labelEn: "This chat",
-    prompt: "請摘要目前開啟的聊天室對話重點，用繁體中文條列說明。"
+    prompt:
+      "請以條列方式摘要目前開啟的聊天室：最新訊息、討論重點、參與者與待跟進事項。"
   },
   {
     id: "translate-en",
@@ -37,7 +39,7 @@ const QUICK_PROMPTS = [
     icon: HelpCircle,
     label: "TSMChat 說明",
     labelEn: "TSMChat help",
-    prompt: "What can TSMChat do? Explain the main features in Traditional Chinese."
+    prompt: "What can TSMChat do? Explain the main features."
   }
 ];
 
@@ -152,8 +154,8 @@ function ChatAgentPanel({
               <div className="min-w-0">
                 <h2 className="font-bold text-gray-900 text-sm">Chat Agent</h2>
                 <p className="text-[10px] text-gray-500 truncate">
-                  {agentModel || "gpt-4.1-nano"} · Live · {liveRoomCount} 聊天室
-                  {liveSyncedAt ? ` · synced ${new Date(liveSyncedAt).toLocaleTimeString()}` : ""}
+                  {agentModel || "gpt-4.1-nano"} · Live · {liveRoomCount} rooms
+                  {liveSyncedAt ? ` · ${new Date(liveSyncedAt).toLocaleTimeString()}` : ""}
                 </p>
               </div>
             </div>
