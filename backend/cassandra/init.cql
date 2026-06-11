@@ -18,4 +18,4 @@ CREATE TABLE IF NOT EXISTS messages (
   sender_avatar_url  TEXT,
   text          TEXT,
   PRIMARY KEY (room_id, created_at, message_id)
-) WITH CLUSTERING ORDER BY (created_at ASC, message_id ASC);
+) WITH CLUSTERING ORDER BY (created_at DESC, message_id DESC);

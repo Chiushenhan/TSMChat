@@ -14,21 +14,21 @@ const router = Router();
 router.get("/:roomId", authMiddleware, async (req, res) => {
   try {
     const { roomId } = req.params;
-    const limit = parseInt(req.query.limit) || 50;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 500);
     const userId = req.user.id;
 
     if (!(await isRoomMember(userId, roomId))) {
       return res.status(403).json({ error: "Not a member of this room" });
     }
 
+    // Read the full room partition and sort in memory so history is reliable
+    // regardless of Cassandra clustering order (ASC vs DESC in different deploys).
     const result = await cassandraClient.execute(
       `SELECT message_id, room_id, sender_id, sender_name, sender_avatar_text,
               sender_avatar_url, text, created_at
        FROM messages
-       WHERE room_id = ?
-       ORDER BY created_at ASC, message_id ASC
-       LIMIT ?`,
-      [roomId, limit],
+       WHERE room_id = ?`,
+      [roomId],
       { prepare: true }
     );
 
@@ -52,7 +52,10 @@ router.get("/:roomId", authMiddleware, async (req, res) => {
         return a.id.localeCompare(b.id);
       });
 
-    res.json(messages);
+    const recent =
+      messages.length > limit ? messages.slice(messages.length - limit) : messages;
+
+    res.json(recent);
   } catch (err) {
     console.error("Get messages error:", err);
     errorsTotal.labels("messages_get").inc();

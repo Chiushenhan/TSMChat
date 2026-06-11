@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Sidebar from "../components/Sidebar.jsx";
 import ChatPanel from "../components/ChatPanel.jsx";
 import NewRoomModal from "../components/NewRoomModal.jsx";
@@ -106,15 +106,37 @@ function ChatPage({ currentUser, onLogout, onOpenAdmin, onUpdateUserId }) {
     );
   });
 
+  const loadRoomMessages = useCallback(async (roomId) => {
+    if (!roomId) return;
+
+    const loadSeq = ++messageLoadSeqRef.current;
+
+    try {
+      const roomMessages = await getMessages(roomId);
+      if (loadSeq !== messageLoadSeqRef.current) return;
+
+      setMessages((prev) => ({
+        ...prev,
+        [roomId]: mergeWithServerMessages(prev[roomId] || [], roomMessages)
+      }));
+    } catch (err) {
+      console.error("Failed to load messages:", err);
+    }
+  }, []);
+
   useEffect(() => {
     async function init() {
       await requestNotificationPermission();
 
-      const roomList = await getChatrooms();
-      setRooms(roomList);
+      try {
+        const roomList = await getChatrooms();
+        setRooms(roomList);
 
-      if (roomList.length > 0) {
-        setSelectedRoomId(roomList[0].id);
+        if (roomList.length > 0) {
+          setSelectedRoomId(roomList[0].id);
+        }
+      } catch (err) {
+        console.error("Failed to initialize chat:", err);
       }
     }
 
@@ -122,20 +144,25 @@ function ChatPage({ currentUser, onLogout, onOpenAdmin, onUpdateUserId }) {
   }, []);
 
   useEffect(() => {
-    async function refreshOnlineStatus() {
+    async function refreshOnReturn() {
       if (document.visibilityState !== "visible") return;
 
       try {
         const roomList = await getChatrooms();
         setRooms(roomList);
+
+        const roomId = selectedRoomIdRef.current;
+        if (roomId) {
+          await loadRoomMessages(roomId);
+        }
       } catch (err) {
-        console.error("Failed to refresh online status:", err);
+        console.error("Failed to refresh chat state:", err);
       }
     }
 
-    document.addEventListener("visibilitychange", refreshOnlineStatus);
-    return () => document.removeEventListener("visibilitychange", refreshOnlineStatus);
-  }, []);
+    document.addEventListener("visibilitychange", refreshOnReturn);
+    return () => document.removeEventListener("visibilitychange", refreshOnReturn);
+  }, [loadRoomMessages]);
 
   useEffect(() => {
     const joinAllRooms = () => {
@@ -148,8 +175,14 @@ function ChatPage({ currentUser, onLogout, onOpenAdmin, onUpdateUserId }) {
     };
 
     joinAllRooms();
-    return onSocketConnect(joinAllRooms);
-  }, [rooms]);
+    return onSocketConnect(() => {
+      joinAllRooms();
+      const roomId = selectedRoomIdRef.current;
+      if (roomId) {
+        loadRoomMessages(roomId);
+      }
+    });
+  }, [rooms, loadRoomMessages]);
 
   useEffect(() => {
     const socket = getSocket();
@@ -258,29 +291,8 @@ function ChatPage({ currentUser, onLogout, onOpenAdmin, onUpdateUserId }) {
   }, []);
 
   useEffect(() => {
-    async function loadMessages() {
-      if (!selectedRoomId) return;
-
-      const loadSeq = ++messageLoadSeqRef.current;
-
-      try {
-        const roomMessages = await getMessages(selectedRoomId);
-        if (loadSeq !== messageLoadSeqRef.current) return;
-
-        setMessages((prev) => ({
-          ...prev,
-          [selectedRoomId]: mergeWithServerMessages(
-            prev[selectedRoomId] || [],
-            roomMessages
-          )
-        }));
-      } catch (err) {
-        console.error("Failed to load messages:", err);
-      }
-    }
-
-    loadMessages();
-  }, [selectedRoomId]);
+    loadRoomMessages(selectedRoomId);
+  }, [selectedRoomId, loadRoomMessages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
