@@ -28,17 +28,9 @@ function sortMessages(messages) {
 }
 
 async function fetchRecentRoomMessages(roomId, limit) {
-  const result = await cassandraClient.execute(
-    `SELECT message_id, sender_id, sender_name, text, created_at
-     FROM messages
-     WHERE room_id = ?
-     ORDER BY created_at DESC, message_id DESC
-     LIMIT ?`,
-    [roomId, limit],
-    { prepare: true }
-  );
-
-  return sortMessages(result.rows.map(mapMessageRow));
+  const all = await fetchAllRoomMessages(roomId);
+  if (all.length <= limit) return all;
+  return all.slice(-limit);
 }
 
 async function fetchAllRoomMessages(roomId) {
@@ -93,10 +85,15 @@ function formatRoomSection(room, memberNames, messages, totalFetched, { isFocus 
   const members = memberNames.join(", ") || "(none)";
   const roomLabel = room.type === "direct" ? "1v1 chat" : "group";
   const focusTag = isFocus ? " [Currently open]" : "";
-  const header = `## ${room.name} (${roomLabel})${focusTag} | members: ${members}`;
+  const roomUpdated = room.updated_at ? formatTime(new Date(room.updated_at)) : "unknown";
+  const lastPreview = room.last_message
+    ? `\nLatest preview (DB): "${room.last_message}" @ ${roomUpdated}`
+    : "";
+
+  const header = `## ${room.name} (${roomLabel})${focusTag} | members: ${members}${lastPreview}`;
 
   if (messages.length === 0) {
-    return `${header}\n(no messages)\n`;
+    return `${header}\n(no messages in store)\n`;
   }
 
   const omitted =
@@ -104,11 +101,42 @@ function formatRoomSection(room, memberNames, messages, totalFetched, { isFocus 
       ? ` [showing latest ${messages.length} of ${totalFetched}]`
       : "";
 
-  const lines = messages.map(
-    (m) => `${m.createdAt} ${m.senderName}: ${m.text}`
-  );
+  const lines = messages.map((m, index) => {
+    const latestTag = index === messages.length - 1 ? " [LATEST]" : "";
+    return `${m.createdAt} ${m.senderName}: ${m.text}${latestTag}`;
+  });
 
   return `${header}${omitted}\n${lines.join("\n")}\n`;
+}
+
+function buildLatestActivityBlock(rooms, roomMessages) {
+  const latest = [];
+
+  for (const room of rooms) {
+    const messages = roomMessages.get(room.id) || [];
+    const last = messages[messages.length - 1];
+    if (!last) continue;
+
+    latest.push({
+      roomName: room.name,
+      roomType: room.type,
+      ...last
+    });
+  }
+
+  latest.sort((a, b) => b.createdAtMs - a.createdAtMs);
+
+  if (latest.length === 0) {
+    return "No messages yet across your rooms.";
+  }
+
+  return latest
+    .slice(0, 15)
+    .map(
+      (m, index) =>
+        `${index === 0 ? "[NEWEST] " : ""}${m.createdAt} | ${m.roomName} (${m.roomType}) | ${m.senderName}: ${m.text}`
+    )
+    .join("\n");
 }
 
 function trimRoomSections(headerLines, sections, maxChars) {
@@ -155,13 +183,17 @@ function orderRooms(rooms, focusRoomId) {
 
 async function buildRoomSection(room, messageLimit, useFullHistory, isFocus) {
   const memberNames = await getRoomMemberNames(room.id);
+  const stored = await fetchAllRoomMessages(room.id);
   const messages = useFullHistory
-    ? await fetchAllRoomMessages(room.id)
-    : await fetchRecentRoomMessages(room.id, messageLimit);
+    ? stored
+    : stored.length > messageLimit
+      ? stored.slice(-messageLimit)
+      : stored;
 
   return {
-    section: formatRoomSection(room, memberNames, messages, messages.length, { isFocus }),
-    messageCount: messages.length
+    section: formatRoomSection(room, memberNames, messages, stored.length, { isFocus }),
+    messageCount: messages.length,
+    messages
   };
 }
 
@@ -199,7 +231,9 @@ export async function buildChatContext(
   ].filter(Boolean);
 
   const sections = [];
+  const roomMessages = new Map();
   let messageCount = 0;
+  const fetchedAt = new Date().toISOString();
 
   for (const room of orderedRooms) {
     const isFocus = room.id === roomId;
@@ -209,7 +243,7 @@ export async function buildChatContext(
         ? MESSAGES_FOCUS_ROOM
         : MESSAGES_PER_ROOM;
 
-    const { section, messageCount: count } = await buildRoomSection(
+    const { section, messageCount: count, messages } = await buildRoomSection(
       room,
       limit,
       useFullHistory,
@@ -217,12 +251,21 @@ export async function buildChatContext(
     );
 
     sections.push(section);
+    roomMessages.set(room.id, messages);
     messageCount += count;
   }
 
+  const latestActivity = buildLatestActivityBlock(rooms, roomMessages);
   const charLimit = useFullHistory ? MAX_CONTEXT_CHARS_FULL : MAX_CONTEXT_CHARS;
   const { text, truncated, droppedMessages } = trimRoomSections(
-    headerLines,
+    [
+      ...headerLines,
+      `Context fetched live at: ${fetchedAt} (Asia/Taipei server time)`,
+      "",
+      "## Most recent activity (newest first)",
+      latestActivity,
+      ""
+    ],
     sections,
     charLimit
   );
@@ -233,7 +276,44 @@ export async function buildChatContext(
     messageCount,
     truncated,
     droppedMessages,
-    mode: useFullHistory ? "full" : "all_rooms"
+    mode: useFullHistory ? "full" : "all_rooms",
+    fetchedAt
+  };
+}
+
+const LIVE_SNAPSHOT_MESSAGES = parseInt(process.env.AGENT_LIVE_SNAPSHOT_MESSAGES || "8", 10);
+
+export async function buildLiveSnapshot(userId) {
+  const rooms = await getUserRooms(userId);
+  const fetchedAt = new Date().toISOString();
+
+  const roomSnapshots = await Promise.all(
+    rooms.map(async (room) => {
+      const [memberNames, messages] = await Promise.all([
+        getRoomMemberNames(room.id),
+        fetchRecentRoomMessages(room.id, LIVE_SNAPSHOT_MESSAGES)
+      ]);
+
+      const latest = messages[messages.length - 1] || null;
+
+      return {
+        id: room.id,
+        name: room.name,
+        type: room.type,
+        lastMessage: room.last_message || "",
+        updatedAt: room.updated_at ? formatTime(new Date(room.updated_at)) : "",
+        members: memberNames,
+        messageCount: messages.length,
+        latestMessage: latest,
+        recentMessages: messages
+      };
+    })
+  );
+
+  return {
+    fetchedAt,
+    roomCount: roomSnapshots.length,
+    rooms: roomSnapshots
   };
 }
 

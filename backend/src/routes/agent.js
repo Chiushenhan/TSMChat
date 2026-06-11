@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authMiddleware } from "../middleware/auth.js";
 import { errorsTotal } from "../metrics/prometheus.js";
-import { buildChatContext } from "../services/agentContext.js";
+import { buildChatContext, buildLiveSnapshot } from "../services/agentContext.js";
 import {
   assertAgentWithinLimits,
   getAgentLimitStatus,
@@ -24,12 +24,19 @@ router.post("/chat", authMiddleware, async (req, res) => {
 
     await assertAgentWithinLimits(req.user.id);
 
-    const { context, roomCount, messageCount, truncated, droppedMessages, mode } =
-      await buildChatContext(req.user.id, {
-        roomId,
-        userMessage,
-        fullHistory: Boolean(fullHistory)
-      });
+    const {
+      context,
+      roomCount,
+      messageCount,
+      truncated,
+      droppedMessages,
+      mode,
+      fetchedAt
+    } = await buildChatContext(req.user.id, {
+      roomId,
+      userMessage,
+      fullHistory: Boolean(fullHistory)
+    });
 
     const chatMessages = [];
 
@@ -63,7 +70,7 @@ router.post("/chat", authMiddleware, async (req, res) => {
       },
       limits: limits.limits,
       limitUsage: limits.usage,
-      context: { roomCount, messageCount, truncated, droppedMessages, mode }
+      context: { roomCount, messageCount, truncated, droppedMessages, mode, fetchedAt }
     });
   } catch (err) {
     console.error("Agent chat error:", err);
@@ -86,6 +93,17 @@ router.post("/chat", authMiddleware, async (req, res) => {
     }
 
     res.status(500).json({ error: err.message || "Agent request failed" });
+  }
+});
+
+router.get("/snapshot", authMiddleware, async (req, res) => {
+  try {
+    const snapshot = await buildLiveSnapshot(req.user.id);
+    res.json(snapshot);
+  } catch (err) {
+    console.error("Agent snapshot error:", err);
+    errorsTotal.labels("agent_snapshot").inc();
+    res.status(500).json({ error: "Failed to load live chat snapshot" });
   }
 });
 

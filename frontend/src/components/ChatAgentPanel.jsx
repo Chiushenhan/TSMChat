@@ -8,7 +8,7 @@ import {
   FileText,
   HelpCircle
 } from "lucide-react";
-import { fetchAgentStatus, sendAgentMessage } from "../api/agentApi.js";
+import { fetchAgentSnapshot, fetchAgentStatus, sendAgentMessage } from "../api/agentApi.js";
 
 const QUICK_PROMPTS = [
   {
@@ -52,19 +52,43 @@ function ChatAgentPanel({
   const [loading, setLoading] = useState(false);
   const [agentEnabled, setAgentEnabled] = useState(true);
   const [agentModel, setAgentModel] = useState("");
+  const [liveSyncedAt, setLiveSyncedAt] = useState("");
+  const [liveRoomCount, setLiveRoomCount] = useState(0);
   const [error, setError] = useState("");
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
   useEffect(() => {
-    if (open) {
-      fetchAgentStatus().then((status) => {
-        setAgentEnabled(status.enabled);
-        setAgentModel(status.model || "");
-      });
-      setTimeout(() => inputRef.current?.focus(), 200);
-    }
+    if (!open) return;
+
+    let cancelled = false;
+
+    fetchAgentStatus().then((status) => {
+      if (cancelled) return;
+      setAgentEnabled(status.enabled);
+      setAgentModel(status.model || "");
+    });
+
+    const syncLiveSnapshot = async () => {
+      try {
+        const snapshot = await fetchAgentSnapshot();
+        if (cancelled) return;
+        setLiveSyncedAt(snapshot.fetchedAt || "");
+        setLiveRoomCount(snapshot.roomCount || 0);
+      } catch (err) {
+        console.debug("Agent live snapshot skipped:", err.message);
+      }
+    };
+
+    syncLiveSnapshot();
+    const timer = setInterval(syncLiveSnapshot, 1000);
+    setTimeout(() => inputRef.current?.focus(), 200);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -128,7 +152,8 @@ function ChatAgentPanel({
               <div className="min-w-0">
                 <h2 className="font-bold text-gray-900 text-sm">Chat Agent</h2>
                 <p className="text-[10px] text-gray-500 truncate">
-                  {agentModel || "gpt-4.1-nano"} · 所有聊天室 · 繁中 / English
+                  {agentModel || "gpt-4.1-nano"} · Live · {liveRoomCount} 聊天室
+                  {liveSyncedAt ? ` · synced ${new Date(liveSyncedAt).toLocaleTimeString()}` : ""}
                 </p>
               </div>
             </div>
@@ -168,7 +193,7 @@ function ChatAgentPanel({
                 你好，{currentUser.name?.split(" ")[0] || "there"}！
               </p>
               <p className="text-xs text-gray-400 mb-4 px-4">
-                可讀取你所有的 1 對 1 與群組聊天，摘要、翻譯或回答任何問題。
+                即時讀取你所有的 1 對 1 與群組聊天（每秒同步），可摘要、翻譯或回答最新訊息相關問題。
                 {selectedRoom ? ` 目前開啟：${selectedRoom.name}` : ""}
               </p>
 

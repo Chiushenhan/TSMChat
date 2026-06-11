@@ -6,6 +6,12 @@ export async function fetchAgentStatus() {
   return res.json();
 }
 
+export async function fetchAgentSnapshot() {
+  const res = await apiFetch("/api/agent/snapshot");
+  if (!res.ok) throw new Error("Failed to load live snapshot");
+  return res.json();
+}
+
 export async function sendAgentMessage({ message, history, roomId }) {
   const res = await apiFetch("/api/agent/chat", {
     method: "POST",
